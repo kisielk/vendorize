@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"go/build"
@@ -53,24 +52,34 @@ func copyFile(dest, src string, perm os.FileMode) error {
 	return err
 }
 
+// getAllImports returns a list of all import paths in the Go files of pkg.
+func getAllImports(pkg *build.Package) []string {
+	allImports := make(map[string]bool)
+	for _, imports := range [][]string{pkg.Imports, pkg.TestImports, pkg.XTestImports} {
+		for _, imp := range imports {
+			allImports[imp] = true
+		}
+	}
+	result := make([]string, 0, len(allImports))
+	for imp := range allImports {
+		result = append(result, imp)
+	}
+	return result
+}
+
 func vendorize(name, dest string) error {
 	rootPkg, err := buildPackage(name)
 	if err != nil {
 		return fmt.Errorf("couldn't import %s: %s", name, err)
 	}
-	if rootPkg == nil {
+	if rootPkg.Goroot {
 		return fmt.Errorf("can't vendorize packages from GOROOT")
 	}
 
-	allImports := make(map[string]bool)
-	for _, imports := range [][]string{rootPkg.Imports, rootPkg.TestImports, rootPkg.XTestImports} {
-		for _, imp := range imports {
-			allImports[imp] = true
-		}
-	}
+	allImports := getAllImports(rootPkg)
 
 	var pkgs []*build.Package
-	for imp := range allImports {
+	for _, imp := range allImports {
 		if strings.HasPrefix(imp, rootPkg.ImportPath) || strings.HasPrefix(imp, dest) {
 			// don't process things we presumably don't need to vendor
 			continue
@@ -80,7 +89,7 @@ func vendorize(name, dest string) error {
 		if err != nil {
 			return fmt.Errorf("%s: couldn't import %s: %s", name, imp, err)
 		}
-		if pkg != nil {
+		if !pkg.Goroot {
 			pkgs = append(pkgs, pkg)
 		}
 	}
@@ -129,36 +138,53 @@ func vendorize(name, dest string) error {
 	} {
 		for _, file := range files {
 			if len(rewrites) > 0 {
-				f, err := rewriteImports(filepath.Join(rootPkg.Dir, file), rewrites)
+				destFile := filepath.Join(gopath, "src", destImportPath, file)
+				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
 				if err != nil {
 					return fmt.Errorf("%s: couldn't rewrite file %q: %s", name, file, err)
 				}
-				//TODO: Actually write this somewhere
-				io.Copy(os.Stderr, f)
 			}
 		}
 	}
 	return nil
 }
 
-func buildPackage(name string) (*build.Package, error) {
+// builtPackages keeps a cache of package builds.
+var builtPackages map[string]*build.Package
+
+// buildPackage builds a package given by the path.
+func buildPackage(path string) (*build.Package, error) {
+	if builtPackages == nil {
+		builtPackages = make(map[string]*build.Package)
+	}
+	if pkg, ok := builtPackages[path]; ok {
+		return pkg, nil
+	}
+
 	ctx := build.Default
 	// TODO(kisielk): support relative imports?
-	pkg, err := ctx.Import(name, "", 0)
+	pkg, err := ctx.Import(path, "", 0)
 	if err != nil {
 		return nil, err
 	}
-	if pkg.Goroot {
-		return nil, nil
-	}
+	builtPackages[path] = pkg
 	return pkg, nil
 }
 
-func rewriteImports(path string, m map[string]string) (io.Reader, error) {
+func rewriteFile(dest, path string, m map[string]string) error {
+	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return rewriteImports(path, m, f)
+}
+
+func rewriteImports(path string, m map[string]string, w io.Writer) error {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for _, s := range f.Imports {
@@ -171,7 +197,5 @@ func rewriteImports(path string, m map[string]string) (io.Reader, error) {
 		}
 	}
 
-	buf := bytes.Buffer{}
-	err = printer.Fprint(&buf, fset, f)
-	return &buf, err
+	return printer.Fprint(w, fset, f)
 }
