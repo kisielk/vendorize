@@ -8,6 +8,7 @@ import (
 	"go/printer"
 	"go/token"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 	"strings"
 )
 
-var fake = flag.Bool("n", true, "If true, don't actually do anything")
+var fake = flag.Bool("n", false, "If true, don't actually do anything")
 
 func main() {
 	flag.Parse()
@@ -28,10 +29,79 @@ func main() {
 		log.Fatal("need a destination path")
 	}
 
-	err := vendorize(pkgName, dest)
+	err := vendorize(pkgName, pkgName, dest)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func vendorize(proj, path, dest string) error {
+	rootPkg, err := buildPackage(path)
+	if err != nil {
+		return fmt.Errorf("couldn't import %s: %s", path, err)
+	}
+	if rootPkg.Goroot {
+		return fmt.Errorf("can't vendorize packages from GOROOT")
+	}
+
+	allImports := getAllImports(rootPkg)
+
+	var pkgs []*build.Package
+	for _, imp := range allImports {
+		if strings.HasPrefix(imp, proj) || strings.HasPrefix(imp, dest) {
+			// don't process things we presumably don't need to vendor
+			continue
+		}
+
+		pkg, err := buildPackage(imp)
+		if err != nil {
+			return fmt.Errorf("%s: couldn't import %s: %s", path, imp, err)
+		}
+		if !pkg.Goroot {
+			pkgs = append(pkgs, pkg)
+		}
+	}
+
+	rewrites := make(map[string]string)
+	for _, pkg := range pkgs {
+		err := vendorize(proj, pkg.ImportPath, dest)
+		if err != nil {
+			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
+		}
+		rewrites[pkg.ImportPath] = dest + "/" + pkg.ImportPath
+	}
+
+	pkgDir := rootPkg.Dir
+
+	// Copy all the files to the destination.
+	if proj != path {
+		destImportPath := dest + "/" + path
+		gopaths := filepath.SplitList(os.Getenv("GOPATH"))
+		gopath := gopaths[len(gopaths)-1]
+		pkgDir = filepath.Join(gopath, "src", destImportPath)
+
+		log.Printf("copying contents of %q to %q", rootPkg.Dir, pkgDir)
+		err := copyDir(pkgDir, rootPkg.Dir)
+		if err != nil {
+			return fmt.Errorf("couldn't copy %s: %s", rootPkg, err)
+		}
+	}
+
+	// Rewrite any imports
+	for _, files := range [][]string{
+		rootPkg.GoFiles, rootPkg.CgoFiles, rootPkg.TestGoFiles, rootPkg.XTestGoFiles,
+	} {
+		for _, file := range files {
+			if len(rewrites) > 0 {
+				destFile := filepath.Join(pkgDir, file)
+				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
+				if err != nil {
+					return fmt.Errorf("%s: couldn't rewrite file %q: %s", path, file, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // copyFile copies the file given by src to dest, creating dest with the permissions given by perm.
@@ -52,6 +122,28 @@ func copyFile(dest, src string, perm os.FileMode) error {
 	return err
 }
 
+// copyDir non-recursively copies the contents of the src directory to dest.
+func copyDir(dest, src string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// We don't recurse.
+		if path != dest && info.IsDir() {
+			return filepath.SkipDir
+		}
+
+		srcFile := filepath.Join(src, path)
+		destFile := filepath.Join(dest, path)
+		log.Printf("copying %q to %q", srcFile, destFile)
+		if *fake {
+			return nil
+		}
+		return copyFile(destFile, srcFile, info.Mode().Perm())
+	})
+}
+
 // getAllImports returns a list of all import paths in the Go files of pkg.
 func getAllImports(pkg *build.Package) []string {
 	allImports := make(map[string]bool)
@@ -65,88 +157,6 @@ func getAllImports(pkg *build.Package) []string {
 		result = append(result, imp)
 	}
 	return result
-}
-
-func vendorize(path, dest string) error {
-	rootPkg, err := buildPackage(path)
-	if err != nil {
-		return fmt.Errorf("couldn't import %s: %s", path, err)
-	}
-	if rootPkg.Goroot {
-		return fmt.Errorf("can't vendorize packages from GOROOT")
-	}
-
-	allImports := getAllImports(rootPkg)
-
-	var pkgs []*build.Package
-	for _, imp := range allImports {
-		if strings.HasPrefix(imp, path) || strings.HasPrefix(imp, dest) {
-			// don't process things we presumably don't need to vendor
-			continue
-		}
-
-		pkg, err := buildPackage(imp)
-		if err != nil {
-			return fmt.Errorf("%s: couldn't import %s: %s", path, imp, err)
-		}
-		if !pkg.Goroot {
-			pkgs = append(pkgs, pkg)
-		}
-	}
-
-	destImportPath := dest + "/" + path
-	rewrites := make(map[string]string)
-	for _, pkg := range pkgs {
-		err := vendorize(pkg.ImportPath, dest)
-		if err != nil {
-			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
-		}
-		rewrites[pkg.ImportPath] = destImportPath
-	}
-
-	gopaths := filepath.SplitList(os.Getenv("GOPATH"))
-	gopath := gopaths[len(gopaths)-1]
-
-	destDir := filepath.Join(gopath, "src", destImportPath)
-
-	// Copy all the files to the destination.
-	err = filepath.Walk(rootPkg.Dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// We don't recurse.
-		if path != rootPkg.Dir && info.IsDir() {
-			return filepath.SkipDir
-		}
-
-		src := filepath.Join(rootPkg.Dir, path)
-		dest := filepath.Join(destDir, path)
-		log.Printf("copying %q to %q", src, dest)
-		if *fake {
-			return nil
-		}
-		return copyFile(dest, src, info.Mode().Perm())
-	})
-	if err != nil {
-		return fmt.Errorf("couldn't copy %s: %s", rootPkg, err)
-	}
-
-	// Rewrite any imports
-	for _, files := range [][]string{
-		rootPkg.GoFiles, rootPkg.CgoFiles, rootPkg.TestGoFiles, rootPkg.XTestGoFiles,
-	} {
-		for _, file := range files {
-			if len(rewrites) > 0 {
-				destFile := filepath.Join(gopath, "src", destImportPath, file)
-				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
-				if err != nil {
-					return fmt.Errorf("%s: couldn't rewrite file %q: %s", path, file, err)
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // builtPackages keeps a cache of package builds.
@@ -172,12 +182,16 @@ func buildPackage(path string) (*build.Package, error) {
 }
 
 func rewriteFile(dest, path string, m map[string]string) error {
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_TRUNC, 0)
+	f, err := ioutil.TempFile("", "vendorize")
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return rewriteImports(path, m, f)
+	err = rewriteImports(path, m, f)
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), dest)
 }
 
 func rewriteImports(path string, m map[string]string, w io.Writer) error {
