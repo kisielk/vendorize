@@ -82,7 +82,7 @@ func vendorize(proj, path, dest string) error {
 
 	pkgDir := rootPkg.Dir
 
-	// Copy all the files to the destination.
+	// Copy the package to dest if we are in an import.
 	if proj != path {
 		pkgDir = filepath.Join(gopath, "src", dest, path)
 		err = copyDir(pkgDir, rootPkg.Dir)
@@ -91,7 +91,7 @@ func vendorize(proj, path, dest string) error {
 		}
 	}
 
-	// Rewrite any imports
+	// Rewrite any import lines in the package.
 	for _, files := range [][]string{
 		rootPkg.GoFiles, rootPkg.CgoFiles, rootPkg.TestGoFiles, rootPkg.XTestGoFiles,
 	} {
