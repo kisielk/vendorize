@@ -85,15 +85,9 @@ func vendorize(proj, path, dest string) error {
 	// Copy all the files to the destination.
 	if proj != path {
 		pkgDir = filepath.Join(gopath, "src", dest, path)
-		err := os.MkdirAll(pkgDir, 0770)
-		if err != nil {
-			return fmt.Errorf("%s: couldn't make destination directory: %s", path, pkgDir)
-		}
-
-		log.Printf("copying contents of %q to %q", rootPkg.Dir, pkgDir)
 		err = copyDir(pkgDir, rootPkg.Dir)
 		if err != nil {
-			return fmt.Errorf("couldn't copy %s: %s", rootPkg.ImportPath, err)
+			return fmt.Errorf("couldn't copy %s: %s", path, err)
 		}
 	}
 
@@ -135,6 +129,14 @@ func copyFile(dest, src string, perm os.FileMode) error {
 
 // copyDir non-recursively copies the contents of the src directory to dest.
 func copyDir(dest, src string) error {
+	log.Printf("copying contents of %q to %q", src, dest)
+	if !*fake {
+		err := os.MkdirAll(dest, 0770)
+		if err != nil {
+			return fmt.Errorf("couldn't make destination directory", dest)
+		}
+	}
+
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -199,6 +201,10 @@ func buildPackage(path string) (*build.Package, error) {
 }
 
 func rewriteFile(dest, path string, m map[string]string) error {
+	if *fake {
+		return nil
+	}
+
 	f, err := ioutil.TempFile("", "vendorize")
 	if err != nil {
 		return err
