@@ -17,6 +17,13 @@ import (
 )
 
 var fake = flag.Bool("n", false, "If true, don't actually do anything")
+var verbose = flag.Bool("v", false, "Provide verbose output")
+
+func verbosef(s string, args ...interface{}) {
+	if *verbose {
+		log.Printf(s, args...)
+	}
+}
 
 // The last component of GOPATH
 var gopath string
@@ -44,7 +51,13 @@ func main() {
 	}
 }
 
+var rewrites map[string]string
+
 func vendorize(proj, path, dest string) error {
+	if rewrites == nil {
+		rewrites = make(map[string]string)
+	}
+
 	rootPkg, err := buildPackage(path)
 	if err != nil {
 		return fmt.Errorf("couldn't import %s: %s", path, err)
@@ -57,11 +70,6 @@ func vendorize(proj, path, dest string) error {
 
 	var pkgs []*build.Package
 	for _, imp := range allImports {
-		if strings.HasPrefix(imp, proj) || strings.HasPrefix(imp, dest) {
-			// don't process things we presumably don't need to vendor
-			continue
-		}
-
 		pkg, err := buildPackage(imp)
 		if err != nil {
 			return fmt.Errorf("%s: couldn't import %s: %s", path, imp, err)
@@ -71,24 +79,23 @@ func vendorize(proj, path, dest string) error {
 		}
 	}
 
-	rewrites := make(map[string]string)
 	for _, pkg := range pkgs {
 		err := vendorize(proj, pkg.ImportPath, dest)
 		if err != nil {
 			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
 		}
-		rewrites[pkg.ImportPath] = dest + "/" + pkg.ImportPath
 	}
 
 	pkgDir := rootPkg.Dir
 
-	// Copy the package to dest if we are in an import.
-	if proj != path {
-		pkgDir = filepath.Join(gopath, "src", dest, path)
+	if _, rewritten := rewrites[path]; !rewritten && !strings.HasPrefix(path, proj) && !strings.HasPrefix(path, dest) {
+		newPath := dest + "/" + path
+		pkgDir = filepath.Join(gopath, "src", newPath)
 		err = copyDir(pkgDir, rootPkg.Dir)
 		if err != nil {
 			return fmt.Errorf("couldn't copy %s: %s", path, err)
 		}
+		rewrites[path] = newPath
 	}
 
 	// Rewrite any import lines in the package.
@@ -98,7 +105,7 @@ func vendorize(proj, path, dest string) error {
 		for _, file := range files {
 			if len(rewrites) > 0 {
 				destFile := filepath.Join(pkgDir, file)
-				log.Printf("rewriting imports in %q", destFile)
+				verbosef("rewriting imports in %q", destFile)
 				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
 				if err != nil {
 					return fmt.Errorf("%s: couldn't rewrite file %q: %s", path, file, err)
@@ -155,7 +162,7 @@ func copyDir(dest, src string) error {
 			return err
 		}
 		destFile := filepath.Join(dest, relPath)
-		log.Printf("copying %q to %q", path, destFile)
+		verbosef("copying %q to %q", path, destFile)
 		if *fake {
 			return nil
 		}
@@ -210,14 +217,14 @@ func rewriteFile(dest, path string, m map[string]string) error {
 		return err
 	}
 	defer f.Close()
-	err = rewriteImports(path, m, f)
+	err = rewriteFileImports(path, m, f)
 	if err != nil {
 		return err
 	}
 	return os.Rename(f.Name(), dest)
 }
 
-func rewriteImports(path string, m map[string]string, w io.Writer) error {
+func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
