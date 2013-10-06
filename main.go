@@ -67,10 +67,10 @@ func getAllImports(pkg *build.Package) []string {
 	return result
 }
 
-func vendorize(name, dest string) error {
-	rootPkg, err := buildPackage(name)
+func vendorize(path, dest string) error {
+	rootPkg, err := buildPackage(path)
 	if err != nil {
-		return fmt.Errorf("couldn't import %s: %s", name, err)
+		return fmt.Errorf("couldn't import %s: %s", path, err)
 	}
 	if rootPkg.Goroot {
 		return fmt.Errorf("can't vendorize packages from GOROOT")
@@ -80,21 +80,21 @@ func vendorize(name, dest string) error {
 
 	var pkgs []*build.Package
 	for _, imp := range allImports {
-		if strings.HasPrefix(imp, rootPkg.ImportPath) || strings.HasPrefix(imp, dest) {
+		if strings.HasPrefix(imp, path) || strings.HasPrefix(imp, dest) {
 			// don't process things we presumably don't need to vendor
 			continue
 		}
 
 		pkg, err := buildPackage(imp)
 		if err != nil {
-			return fmt.Errorf("%s: couldn't import %s: %s", name, imp, err)
+			return fmt.Errorf("%s: couldn't import %s: %s", path, imp, err)
 		}
 		if !pkg.Goroot {
 			pkgs = append(pkgs, pkg)
 		}
 	}
 
-	destImportPath := dest + "/" + rootPkg.ImportPath
+	destImportPath := dest + "/" + path
 	rewrites := make(map[string]string)
 	for _, pkg := range pkgs {
 		err := vendorize(pkg.ImportPath, dest)
@@ -141,7 +141,7 @@ func vendorize(name, dest string) error {
 				destFile := filepath.Join(gopath, "src", destImportPath, file)
 				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
 				if err != nil {
-					return fmt.Errorf("%s: couldn't rewrite file %q: %s", name, file, err)
+					return fmt.Errorf("%s: couldn't rewrite file %q: %s", path, file, err)
 				}
 			}
 		}
