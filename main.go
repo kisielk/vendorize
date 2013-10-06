@@ -16,26 +16,23 @@ import (
 	"strings"
 )
 
-var fake = flag.Bool("n", false, "If true, don't actually do anything")
-var verbose = flag.Bool("v", false, "Provide verbose output")
-
-func verbosef(s string, args ...interface{}) {
-	if *verbose {
-		log.Printf(s, args...)
-	}
-}
-
-// The last component of GOPATH
-var gopath string
+var (
+	fake     bool
+	rewrites map[string]string // rewrites that have been performed
+	gopath   string            // the last component of GOPATH
+)
 
 func main() {
+	flag.BoolVar(&fake, "n", false, "If true, don't actually do anything")
+	flag.BoolVar(&verbose, "v", false, "Provide verbose output")
+	flag.Var(&ignorePrefixes, "ignore", "Package prefix to ignore. Can be given multiple times.")
+	flag.Parse()
+
 	gopaths := filepath.SplitList(os.Getenv("GOPATH"))
 	gopath = gopaths[len(gopaths)-1]
 	if gopath == "" {
 		log.Fatal("GOPATH must be set")
 	}
-
-	flag.Parse()
 	pkgName := flag.Arg(0)
 	if pkgName == "" {
 		log.Fatal("need a package name")
@@ -45,15 +42,16 @@ func main() {
 		log.Fatal("need a destination path")
 	}
 
-	err := vendorize(pkgName, pkgName, dest)
+	ignorePrefixes = append(ignorePrefixes, pkgName)
+	ignorePrefixes = append(ignorePrefixes, dest)
+
+	err := vendorize(pkgName, dest)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-var rewrites map[string]string
-
-func vendorize(proj, path, dest string) error {
+func vendorize(path, dest string) error {
 	if rewrites == nil {
 		rewrites = make(map[string]string)
 	}
@@ -80,7 +78,7 @@ func vendorize(proj, path, dest string) error {
 	}
 
 	for _, pkg := range pkgs {
-		err := vendorize(proj, pkg.ImportPath, dest)
+		err := vendorize(pkg.ImportPath, dest)
 		if err != nil {
 			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
 		}
@@ -88,7 +86,7 @@ func vendorize(proj, path, dest string) error {
 
 	pkgDir := rootPkg.Dir
 
-	if _, rewritten := rewrites[path]; !rewritten && !strings.HasPrefix(path, proj) && !strings.HasPrefix(path, dest) {
+	if !ignored(path) {
 		newPath := dest + "/" + path
 		pkgDir = filepath.Join(gopath, "src", newPath)
 		err = copyDir(pkgDir, rootPkg.Dir)
@@ -116,6 +114,22 @@ func vendorize(proj, path, dest string) error {
 	return nil
 }
 
+// package prefixes that should not be copied
+var ignorePrefixes stringSliceFlag
+
+func ignored(path string) bool {
+	_, rewritten := rewrites[path]
+	if rewritten {
+		return true
+	}
+	for _, prefix := range ignorePrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // copyFile copies the file given by src to dest, creating dest with the permissions given by perm.
 func copyFile(dest, src string, perm os.FileMode) error {
 	in, err := os.Open(src)
@@ -137,7 +151,7 @@ func copyFile(dest, src string, perm os.FileMode) error {
 // copyDir non-recursively copies the contents of the src directory to dest.
 func copyDir(dest, src string) error {
 	log.Printf("copying contents of %q to %q", src, dest)
-	if !*fake {
+	if !fake {
 		err := os.MkdirAll(dest, 0770)
 		if err != nil {
 			return fmt.Errorf("couldn't make destination directory", dest)
@@ -163,7 +177,7 @@ func copyDir(dest, src string) error {
 		}
 		destFile := filepath.Join(dest, relPath)
 		verbosef("copying %q to %q", path, destFile)
-		if *fake {
+		if fake {
 			return nil
 		}
 		return copyFile(destFile, path, info.Mode().Perm())
@@ -185,7 +199,7 @@ func getAllImports(pkg *build.Package) []string {
 	return result
 }
 
-// builtPackages keeps a cache of package builds.
+// builtPackages maintains a cache of package builds.
 var builtPackages map[string]*build.Package
 
 // buildPackage builds a package given by the path.
@@ -208,7 +222,7 @@ func buildPackage(path string) (*build.Package, error) {
 }
 
 func rewriteFile(dest, path string, m map[string]string) error {
-	if *fake {
+	if fake {
 		return nil
 	}
 
@@ -242,4 +256,26 @@ func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 	}
 
 	return printer.Fprint(w, fset, f)
+}
+
+// stringSliceFlag is a flag.Value that accumulates multiple flags in to a slice.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return fmt.Sprintf("%v", []string(*s))
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+// verbose controls the level of logging.
+var verbose bool
+
+// verbosef logs only if verbose is true.
+func verbosef(s string, args ...interface{}) {
+	if verbose {
+		log.Printf(s, args...)
+	}
 }
