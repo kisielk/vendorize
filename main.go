@@ -18,7 +18,16 @@ import (
 
 var fake = flag.Bool("n", false, "If true, don't actually do anything")
 
+// The last component of GOPATH
+var gopath string
+
 func main() {
+	gopaths := filepath.SplitList(os.Getenv("GOPATH"))
+	gopath = gopaths[len(gopaths)-1]
+	if gopath == "" {
+		log.Fatal("GOPATH must be set")
+	}
+
 	flag.Parse()
 	pkgName := flag.Arg(0)
 	if pkgName == "" {
@@ -75,15 +84,16 @@ func vendorize(proj, path, dest string) error {
 
 	// Copy all the files to the destination.
 	if proj != path {
-		destImportPath := dest + "/" + path
-		gopaths := filepath.SplitList(os.Getenv("GOPATH"))
-		gopath := gopaths[len(gopaths)-1]
-		pkgDir = filepath.Join(gopath, "src", destImportPath)
+		pkgDir = filepath.Join(gopath, "src", dest, path)
+		err := os.MkdirAll(pkgDir, 0770)
+		if err != nil {
+			return fmt.Errorf("%s: couldn't make destination directory: %s", path, pkgDir)
+		}
 
 		log.Printf("copying contents of %q to %q", rootPkg.Dir, pkgDir)
-		err := copyDir(pkgDir, rootPkg.Dir)
+		err = copyDir(pkgDir, rootPkg.Dir)
 		if err != nil {
-			return fmt.Errorf("couldn't copy %s: %s", rootPkg, err)
+			return fmt.Errorf("couldn't copy %s: %s", rootPkg.ImportPath, err)
 		}
 	}
 
@@ -94,6 +104,7 @@ func vendorize(proj, path, dest string) error {
 		for _, file := range files {
 			if len(rewrites) > 0 {
 				destFile := filepath.Join(pkgDir, file)
+				log.Printf("rewriting imports in %q", destFile)
 				err := rewriteFile(destFile, filepath.Join(rootPkg.Dir, file), rewrites)
 				if err != nil {
 					return fmt.Errorf("%s: couldn't rewrite file %q: %s", path, file, err)
@@ -130,17 +141,23 @@ func copyDir(dest, src string) error {
 		}
 
 		// We don't recurse.
-		if path != dest && info.IsDir() {
-			return filepath.SkipDir
+		if info.IsDir() {
+			if path != src {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
-		srcFile := filepath.Join(src, path)
-		destFile := filepath.Join(dest, path)
-		log.Printf("copying %q to %q", srcFile, destFile)
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		destFile := filepath.Join(dest, relPath)
+		log.Printf("copying %q to %q", path, destFile)
 		if *fake {
 			return nil
 		}
-		return copyFile(destFile, srcFile, info.Mode().Perm())
+		return copyFile(destFile, path, info.Mode().Perm())
 	})
 }
 
