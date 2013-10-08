@@ -78,6 +78,10 @@ func vendorize(path, dest string) error {
 	}
 
 	for _, pkg := range pkgs {
+		if pkg.ImportPath == path {
+			// Don't recurse into self.
+			continue
+		}
 		err := vendorize(pkg.ImportPath, dest)
 		if err != nil {
 			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
