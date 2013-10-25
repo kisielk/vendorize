@@ -19,6 +19,7 @@ import (
 var (
 	fake     bool
 	rewrites map[string]string // rewrites that have been performed
+	visited  map[string]bool   // packages that have already been visited
 	gopath   string            // the last component of GOPATH
 )
 
@@ -44,6 +45,8 @@ func main() {
 
 	ignorePrefixes = append(ignorePrefixes, pkgName)
 	ignorePrefixes = append(ignorePrefixes, dest)
+	rewrites = make(map[string]string)
+	visited = make(map[string]bool)
 
 	err := vendorize(pkgName, dest)
 	if err != nil {
@@ -52,11 +55,11 @@ func main() {
 }
 
 func vendorize(path, dest string) error {
-	verbosef("vendorizing %s", path)
-	if rewrites == nil {
-		rewrites = make(map[string]string)
+	if visited[path] {
+		return nil
 	}
 
+	verbosef("vendorizing %s", path)
 	rootPkg, err := buildPackage(path)
 	if err != nil {
 		return fmt.Errorf("couldn't import %s: %s", path, err)
@@ -116,6 +119,7 @@ func vendorize(path, dest string) error {
 			}
 		}
 	}
+	visited[path] = true
 	return nil
 }
 
