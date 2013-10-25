@@ -52,6 +52,7 @@ func main() {
 }
 
 func vendorize(path, dest string) error {
+	verbosef("vendorizing %s", path)
 	if rewrites == nil {
 		rewrites = make(map[string]string)
 	}
