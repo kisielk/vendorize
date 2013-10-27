@@ -72,6 +72,9 @@ func vendorize(path, dest string) error {
 
 	var pkgs []*build.Package
 	for _, imp := range allImports {
+		if imp == "C" {
+			continue
+		}
 		pkg, err := buildPackage(imp)
 		if err != nil {
 			return fmt.Errorf("%s: couldn't import %s: %s", path, imp, err)
