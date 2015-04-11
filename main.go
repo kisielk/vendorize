@@ -264,6 +264,9 @@ func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 		}
 		if replacement, ok := m[path]; ok {
 			s.Path.Value = strconv.Quote(replacement)
+			if strings.HasPrefix(s.Comment.Text(), "import ") {
+				s.Comment.List[0].Text = "// #vendorized# " + s.Comment.List[0].Text[2:]
+			}
 		}
 	}
 
