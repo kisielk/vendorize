@@ -58,6 +58,7 @@ func vendorize(path, dest string) error {
 	if visited[path] {
 		return nil
 	}
+	visited[path] = true
 
 	verbosef("vendorizing %s", path)
 	rootPkg, err := buildPackage(path)
@@ -85,10 +86,6 @@ func vendorize(path, dest string) error {
 	}
 
 	for _, pkg := range pkgs {
-		if pkg.ImportPath == path {
-			// Don't recurse into self.
-			continue
-		}
 		err := vendorize(pkg.ImportPath, dest)
 		if err != nil {
 			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
@@ -122,7 +119,6 @@ func vendorize(path, dest string) error {
 			}
 		}
 	}
-	visited[path] = true
 	return nil
 }
 
