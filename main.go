@@ -4,8 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
+	"go/format"
 	"go/parser"
-	"go/printer"
 	"go/token"
 	"io"
 	"io/ioutil"
@@ -263,7 +263,7 @@ func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 		}
 	}
 
-	return printer.Fprint(w, fset, f)
+	return format.Node(w, fset, f)
 }
 
 // stringSliceFlag is a flag.Value that accumulates multiple flags in to a slice.
