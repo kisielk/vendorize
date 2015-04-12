@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/ast"
 	"go/build"
 	"go/parser"
 	"go/printer"
@@ -253,6 +254,8 @@ func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 		return err
 	}
 
+	removeImportComment(fset, f)
+
 	for _, s := range f.Imports {
 		path, err := strconv.Unquote(s.Path.Value)
 		if err != nil {
@@ -264,6 +267,28 @@ func rewriteFileImports(path string, m map[string]string, w io.Writer) error {
 	}
 
 	return printer.Fprint(w, fset, f)
+}
+
+// removeImportComment removes the import comment in f, if one exists.
+func removeImportComment(fset *token.FileSet, f *ast.File) {
+	// The import comment must be immediately after (and on the same line as)
+	// the package declaration.
+	// Loop through the comments until we find one that is on that line or beyond.
+	nameLine := fset.Position(f.Name.NamePos).Line
+	for _, comments := range f.Comments {
+		commentLine := fset.Position(comments.Pos()).Line
+		if commentLine == nameLine {
+			comment := comments.List[0]
+			if strings.HasPrefix(comment.Text, "// import ") ||
+				strings.HasPrefix(comment.Text, "/* import ") {
+				comment.Text = "// #vendored#"
+			}
+			return
+		}
+		if commentLine > nameLine {
+			return
+		}
+	}
 }
 
 // stringSliceFlag is a flag.Value that accumulates multiple flags in to a slice.
