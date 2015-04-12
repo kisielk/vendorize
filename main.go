@@ -235,7 +235,7 @@ func rewriteFile(dest, path string, m map[string]string) error {
 		return nil
 	}
 
-	f, err := ioutil.TempFile("", "vendorize")
+	f, err := ioutil.TempFile(filepath.Dir(dest), "vendorize")
 	if err != nil {
 		return err
 	}
