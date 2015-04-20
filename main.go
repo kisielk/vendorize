@@ -21,7 +21,6 @@ var (
 	fake     bool
 	rewrites map[string]string // rewrites that have been performed
 	visited  map[string]bool   // packages that have already been visited
-	gopath   string            // the last component of GOPATH
 )
 
 func main() {
@@ -31,8 +30,7 @@ func main() {
 	flag.Parse()
 
 	gopaths := filepath.SplitList(os.Getenv("GOPATH"))
-	gopath = gopaths[len(gopaths)-1]
-	if gopath == "" {
+	if len(gopaths) == 0 {
 		log.Fatal("GOPATH must be set")
 	}
 	pkgName := flag.Arg(0)
@@ -49,13 +47,45 @@ func main() {
 	rewrites = make(map[string]string)
 	visited = make(map[string]bool)
 
-	err := vendorize(pkgName, dest)
+	err := vendorize(pkgName, chooseGOPATH(gopaths, dest), dest)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func vendorize(path, dest string) error {
+// chooseGOPATH selects the gopath component that has the longest prefix in common with dest.
+// It breaks ties by preferring earlier components.
+func chooseGOPATH(gopaths []string, dest string) string {
+	for {
+		dest = strings.TrimSuffix(dest, "/")
+		chosen := ""
+		for i := len(gopaths) - 1; i >= 0; i-- {
+			dir := filepath.Join(gopaths[i], "src", dest)
+			if _, err := os.Stat(dir); err == nil {
+				chosen = gopaths[i]
+			}
+		}
+		if chosen != "" {
+			return chosen
+		}
+
+		dest, _ = filepath.Split(dest)
+		if dest == "" {
+			break
+		}
+	}
+
+	// None of the gopaths contain any prefix of dest.
+	// Pick the first gopath that exists.
+	for _, dir := range gopaths {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+	}
+	return gopaths[0]
+}
+
+func vendorize(path, gopath, dest string) error {
 	if visited[path] {
 		return nil
 	}
@@ -87,7 +117,7 @@ func vendorize(path, dest string) error {
 	}
 
 	for _, pkg := range pkgs {
-		err := vendorize(pkg.ImportPath, dest)
+		err := vendorize(pkg.ImportPath, gopath, dest)
 		if err != nil {
 			return fmt.Errorf("couldn't vendorize %s: %s", pkg.ImportPath, err)
 		}
